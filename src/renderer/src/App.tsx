@@ -48,10 +48,7 @@ function App(): React.JSX.Element {
           next = "welcome";
         }
       } else if (conn.mode === "remote" && conn.remoteUrl) {
-        const ok = await window.hermesAPI.testRemoteConnection(
-          conn.remoteUrl,
-          conn.apiKey,
-        );
+        const ok = await window.hermesAPI.testRemoteConnection(conn.remoteUrl);
         if (ok) {
           next = "main";
         } else {

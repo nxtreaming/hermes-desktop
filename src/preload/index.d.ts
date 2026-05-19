@@ -154,7 +154,7 @@ interface HermesAPI {
   getConnectionConfig: () => Promise<{
     mode: "local" | "remote" | "ssh";
     remoteUrl: string;
-    apiKey: string;
+    hasApiKey: boolean;
     ssh: {
       host: string;
       port: number;

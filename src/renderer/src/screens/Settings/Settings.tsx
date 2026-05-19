@@ -16,6 +16,8 @@ const LANGUAGE_NATIVE_NAMES: Record<AppLocale, string> = {
   "zh-CN": "中文",
 };
 
+const REMOTE_API_KEY_MASK = "********";
+
 // Read cached values from localStorage for instant display
 function getCachedVersion(): string | null {
   try {
@@ -74,7 +76,9 @@ function Settings({ profile }: { profile?: string }): React.JSX.Element {
   // Connection mode
   const [connMode, setConnMode] = useState<"local" | "remote" | "ssh">("local");
   const [connRemoteUrl, setConnRemoteUrl] = useState("");
+  const [connSavedRemoteUrl, setConnSavedRemoteUrl] = useState("");
   const [connApiKey, setConnApiKey] = useState("");
+  const [connHasApiKey, setConnHasApiKey] = useState(false);
   const [connTesting, setConnTesting] = useState(false);
   const [connStatus, setConnStatus] = useState<string | null>(null);
   const connLoaded = useRef(false);
@@ -118,7 +122,9 @@ function Settings({ profile }: { profile?: string }): React.JSX.Element {
     setAppVersion(aVersion);
     setConnMode(conn.mode);
     setConnRemoteUrl(conn.remoteUrl);
-    setConnApiKey(conn.apiKey);
+    setConnSavedRemoteUrl(conn.remoteUrl);
+    setConnHasApiKey(conn.hasApiKey);
+    setConnApiKey(conn.hasApiKey ? REMOTE_API_KEY_MASK : "");
     setSshHost(conn.ssh?.host || "");
     setSshPort(conn.ssh?.port ? String(conn.ssh.port) : "");
     setSshUser(conn.ssh?.username || "");
@@ -198,6 +204,13 @@ function Settings({ profile }: { profile?: string }): React.JSX.Element {
     setMigrationDismissed(true);
   }
 
+  function getConnectionApiKeyForSave(): string | undefined {
+    if (connHasApiKey && connApiKey === REMOTE_API_KEY_MASK) {
+      return connRemoteUrl === connSavedRemoteUrl ? undefined : "";
+    }
+    return connApiKey.trim();
+  }
+
   async function handleSaveConnection(): Promise<void> {
     if (connMode === "ssh") {
       await window.hermesAPI.setSshConfig(
@@ -209,7 +222,18 @@ function Settings({ profile }: { profile?: string }): React.JSX.Element {
         18642,
       );
     } else {
-      await window.hermesAPI.setConnectionConfig(connMode, connRemoteUrl, connApiKey);
+      const apiKey = getConnectionApiKeyForSave();
+      await window.hermesAPI.setConnectionConfig(
+        connMode,
+        connRemoteUrl,
+        apiKey,
+      );
+      setConnSavedRemoteUrl(connRemoteUrl);
+      if (apiKey !== undefined) {
+        const hasApiKey = apiKey.length > 0;
+        setConnHasApiKey(hasApiKey);
+        if (hasApiKey) setConnApiKey(REMOTE_API_KEY_MASK);
+      }
     }
     setConnStatus("Saved");
     setTimeout(() => setConnStatus(null), 2000);
@@ -234,10 +258,16 @@ function Settings({ profile }: { profile?: string }): React.JSX.Element {
       setConnStatus(ok ? "SSH tunnel connected!" : "Could not connect via SSH");
     } else {
       const url = connRemoteUrl.trim();
-      if (!url) { setConnStatus("Please enter a URL"); return; }
+      if (!url) {
+        setConnStatus("Please enter a URL");
+        return;
+      }
       setConnTesting(true);
       setConnStatus(null);
-      const ok = await window.hermesAPI.testRemoteConnection(url, connApiKey.trim());
+      const ok = await window.hermesAPI.testRemoteConnection(
+        url,
+        getConnectionApiKeyForSave(),
+      );
       setConnTesting(false);
       setConnStatus(ok ? "Connected successfully!" : "Could not reach server");
     }
@@ -246,7 +276,9 @@ function Settings({ profile }: { profile?: string }): React.JSX.Element {
   async function handleSwitchToLocal(): Promise<void> {
     setConnMode("local");
     setConnRemoteUrl("");
+    setConnSavedRemoteUrl("");
     setConnApiKey("");
+    setConnHasApiKey(false);
     await window.hermesAPI.setConnectionConfig("local", "", "");
     setConnStatus(t("settings.switchedToLocal"));
     setTimeout(() => setConnStatus(null), 2000);
@@ -541,8 +573,8 @@ function Settings({ profile }: { profile?: string }): React.JSX.Element {
             {connMode === "local"
               ? t("settings.modeLocalHint")
               : connMode === "ssh"
-              ? "Tunnel to a remote Hermes over SSH — no exposed ports or API keys needed."
-              : t("settings.modeRemoteHint")}
+                ? "Tunnel to a remote Hermes over SSH — no exposed ports or API keys needed."
+                : t("settings.modeRemoteHint")}
           </div>
         </div>
 
@@ -573,6 +605,11 @@ function Settings({ profile }: { profile?: string }): React.JSX.Element {
                 type="password"
                 value={connApiKey}
                 onChange={(e) => setConnApiKey(e.target.value)}
+                onFocus={(e) => {
+                  if (connApiKey === REMOTE_API_KEY_MASK) {
+                    e.currentTarget.select();
+                  }
+                }}
                 placeholder={t("settings.remoteApiKey")}
                 onBlur={handleSaveConnection}
               />
@@ -586,9 +623,14 @@ function Settings({ profile }: { profile?: string }): React.JSX.Element {
                 onClick={handleTestConnection}
                 disabled={connTesting}
               >
-                {connTesting ? t("settings.testingConnection") : t("settings.testConnection")}
+                {connTesting
+                  ? t("settings.testingConnection")
+                  : t("settings.testConnection")}
               </button>
-              <button className="btn btn-primary" onClick={handleSaveConnection}>
+              <button
+                className="btn btn-primary"
+                onClick={handleSaveConnection}
+              >
                 {t("settings.save")}
               </button>
             </div>
@@ -630,7 +672,9 @@ function Settings({ profile }: { profile?: string }): React.JSX.Element {
             <div className="settings-field">
               <label className="settings-field-label">
                 Private Key Path{" "}
-                <span style={{ fontWeight: 400, opacity: 0.6 }}>(optional, defaults to ~/.ssh/id_rsa)</span>
+                <span style={{ fontWeight: 400, opacity: 0.6 }}>
+                  (optional, defaults to ~/.ssh/id_rsa)
+                </span>
               </label>
               <input
                 className="input"
@@ -643,7 +687,9 @@ function Settings({ profile }: { profile?: string }): React.JSX.Element {
             <div className="settings-field">
               <label className="settings-field-label">
                 Remote Hermes Port{" "}
-                <span style={{ fontWeight: 400, opacity: 0.6 }}>(default 8642)</span>
+                <span style={{ fontWeight: 400, opacity: 0.6 }}>
+                  (default 8642)
+                </span>
               </label>
               <input
                 className="input"
@@ -653,8 +699,16 @@ function Settings({ profile }: { profile?: string }): React.JSX.Element {
                 placeholder="8642"
               />
               <div className="settings-field-hint">
-                Make sure you can run <code style={{ fontFamily: "monospace" }}>ssh {sshUser || "user"}@{sshHost || "host"}</code> without a password prompt.
-                The first connection trusts the host key and stores it in <code style={{ fontFamily: "monospace" }}>~/.ssh/known_hosts</code>; SSH will fail closed if that key changes later.
+                Make sure you can run{" "}
+                <code style={{ fontFamily: "monospace" }}>
+                  ssh {sshUser || "user"}@{sshHost || "host"}
+                </code>{" "}
+                without a password prompt. The first connection trusts the host
+                key and stores it in{" "}
+                <code style={{ fontFamily: "monospace" }}>
+                  ~/.ssh/known_hosts
+                </code>
+                ; SSH will fail closed if that key changes later.
               </div>
             </div>
             <div className="settings-hermes-actions">
@@ -665,7 +719,10 @@ function Settings({ profile }: { profile?: string }): React.JSX.Element {
               >
                 {connTesting ? "Testing SSH…" : "Test SSH Connection"}
               </button>
-              <button className="btn btn-primary" onClick={handleSaveConnection}>
+              <button
+                className="btn btn-primary"
+                onClick={handleSaveConnection}
+              >
                 {t("settings.save")}
               </button>
             </div>

@@ -21,6 +21,13 @@ export interface ConnectionConfig {
   ssh: SshConnectionConfig;
 }
 
+export interface PublicConnectionConfig {
+  mode: "local" | "remote" | "ssh";
+  remoteUrl: string;
+  hasApiKey: boolean;
+  ssh: SshConnectionConfig;
+}
+
 // Lazy getter — avoids circular dependency with installer.ts
 // (HERMES_HOME may not be assigned yet when this module first loads)
 function desktopConfigFile(): string {
@@ -62,6 +69,16 @@ export function getConnectionConfig(): ConnectionConfig {
   };
 }
 
+export function getPublicConnectionConfig(): PublicConnectionConfig {
+  const config = getConnectionConfig();
+  return {
+    mode: config.mode,
+    remoteUrl: config.remoteUrl,
+    hasApiKey: config.apiKey.length > 0,
+    ssh: config.ssh,
+  };
+}
+
 export function setConnectionConfig(config: ConnectionConfig): void {
   const data = readDesktopConfig();
   data.connectionMode = config.mode;
@@ -71,6 +88,19 @@ export function setConnectionConfig(config: ConnectionConfig): void {
     data.sshConfig = config.ssh;
   }
   writeDesktopConfig(data);
+}
+
+export function resolveConnectionApiKeyUpdate(
+  existing: ConnectionConfig,
+  mode: "local" | "remote" | "ssh",
+  remoteUrl: string,
+  apiKey?: string,
+): string {
+  if (apiKey !== undefined) return apiKey;
+  if (existing.mode === mode && existing.remoteUrl === remoteUrl) {
+    return existing.apiKey;
+  }
+  return "";
 }
 
 // ── In-memory cache with TTL ─────────────────────────────
@@ -274,7 +304,7 @@ export function setModelConfig(
     // Append base_url line after the provider line in the model section
     content = content.replace(
       /^(\s*provider:\s*"[^"]*"\s*\n)/m,
-      `$1  base_url: "${baseUrl}"\n`
+      `$1  base_url: "${baseUrl}"\n`,
     );
   }
 

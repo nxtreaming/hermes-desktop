@@ -12,7 +12,12 @@ import {
   getEnhancedPath,
 } from "./installer";
 import { getModelConfig, readEnv, getConnectionConfig } from "./config";
-import { getSshTunnelUrl, isSshTunnelActive, isSshTunnelHealthy, startSshTunnel } from "./ssh-tunnel";
+import {
+  getSshTunnelUrl,
+  isSshTunnelActive,
+  isSshTunnelHealthy,
+  startSshTunnel,
+} from "./ssh-tunnel";
 import { stripAnsi } from "./utils";
 import { readModels } from "./models";
 import { HIDDEN_SUBPROCESS_OPTIONS } from "./process-options";
@@ -52,7 +57,8 @@ export function setSshRemoteApiKey(key: string): void {
 export function getRemoteAuthHeader(): Record<string, string> {
   const conn = getConnectionConfig();
   if (conn.mode === "ssh") {
-    if (_sshRemoteApiKey) return { Authorization: `Bearer ${_sshRemoteApiKey}` };
+    if (_sshRemoteApiKey)
+      return { Authorization: `Bearer ${_sshRemoteApiKey}` };
     return {};
   }
   if (conn.mode === "remote" && conn.apiKey) {
@@ -61,9 +67,27 @@ export function getRemoteAuthHeader(): Record<string, string> {
   return {};
 }
 
+function stripTrailingSlashes(url: string): string {
+  return url.replace(/\/+$/, "");
+}
+
+function resolveRemoteApiKey(url: string, apiKey?: string): string {
+  if (apiKey !== undefined) return apiKey;
+
+  const conn = getConnectionConfig();
+  if (conn.mode !== "remote" || !conn.apiKey || !conn.remoteUrl) return "";
+  if (stripTrailingSlashes(conn.remoteUrl) !== stripTrailingSlashes(url)) {
+    return "";
+  }
+  return conn.apiKey;
+}
+
 export async function ensureSshTunnelIfNeeded(): Promise<void> {
   const conn = getConnectionConfig();
-  if (conn.mode === "ssh" && (!isSshTunnelActive() || !await isSshTunnelHealthy())) {
+  if (
+    conn.mode === "ssh" &&
+    (!isSshTunnelActive() || !(await isSshTunnelHealthy()))
+  ) {
     await startSshTunnel(conn.ssh);
   }
 }
@@ -421,7 +445,9 @@ function sendMessageViaApi(
   });
   req.on("timeout", () => {
     req.destroy();
-    finish("API request timed out. Check the SSH tunnel and remote Hermes gateway.");
+    finish(
+      "API request timed out. Check the SSH tunnel and remote Hermes gateway.",
+    );
   });
 
   req.write(body);
@@ -505,9 +531,13 @@ function sendMessageViaCli(
     // Check if this model has an explicit apiMode from custom_providers
     let modelApiMode: string | null = null;
     try {
-      const modelEntry = readModels().find(m => m.baseUrl === mc.baseUrl && m.model === mc.model);
+      const modelEntry = readModels().find(
+        (m) => m.baseUrl === mc.baseUrl && m.model === mc.model,
+      );
       if (modelEntry) modelApiMode = modelEntry.apiMode || null;
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
     const isAnthropicProtocol = modelApiMode === "anthropic_messages";
     if (isAnthropicProtocol) {
       env.HERMES_INFERENCE_PROVIDER = "anthropic";
@@ -529,12 +559,17 @@ function sendMessageViaCli(
       // Try custom provider auto-generated key from models.json
       try {
         const models = readModels();
-        const matching = models.find(m => m.baseUrl === mc.baseUrl);
+        const matching = models.find((m) => m.baseUrl === mc.baseUrl);
         if (matching) {
-          const envKey2 = "CUSTOM_PROVIDER_" + matching.name.replace(/[^A-Za-z0-9]/g, "_").toUpperCase() + "_KEY";
+          const envKey2 =
+            "CUSTOM_PROVIDER_" +
+            matching.name.replace(/[^A-Za-z0-9]/g, "_").toUpperCase() +
+            "_KEY";
           resolvedKey = profileEnv[envKey2] || env[envKey2] || "";
         }
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
       if (!resolvedKey) {
         resolvedKey =
           profileEnv.CUSTOM_API_KEY ||
@@ -833,10 +868,11 @@ export function testRemoteConnection(
   apiKey?: string,
 ): Promise<boolean> {
   return new Promise((resolve) => {
-    const target = `${url.replace(/\/+$/, "")}/health`;
+    const target = `${stripTrailingSlashes(url)}/health`;
     const mod = target.startsWith("https") ? https : http;
     const headers: Record<string, string> = {};
-    if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+    const resolvedApiKey = resolveRemoteApiKey(url, apiKey);
+    if (resolvedApiKey) headers.Authorization = `Bearer ${resolvedApiKey}`;
     const req = mod.request(
       target,
       { method: "GET", timeout: 5000, headers },
