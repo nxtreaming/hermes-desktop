@@ -209,6 +209,187 @@ export function validateEnvEntry(key: string, value: string): void {
   }
 }
 
+function stripYamlQuotes(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed.length >= 2) {
+    const first = trimmed[0];
+    const last = trimmed[trimmed.length - 1];
+    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+      return trimmed.slice(1, -1);
+    }
+  }
+  return trimmed;
+}
+
+/**
+ * Locate a dotted YAML path in `content` (e.g. "agent.service_tier" finds
+ * the `service_tier` field nested under top-level `agent:`). Returns the
+ * value plus the substring offsets a writer can splice over, or null
+ * when any segment of the path is missing.
+ *
+ * Why this exists: the renderer passes dotted paths like
+ * `agent.service_tier`, `memory.provider`, `network.force_ipv4` through
+ * `getConfig`/`setConfig`. The old implementation used the key string as
+ * a literal regex fragment, so it looked for a flat line spelled exactly
+ * `agent.service_tier:` — which never exists in real YAML and silently
+ * returned null. Flat keys also leaked across blocks (a `service_tier`
+ * under `telegram:` could shadow `agent.service_tier`). See issue #247.
+ *
+ * Each segment must appear at strictly-greater indent than its parent's
+ * line. Segments without dots are treated as 1-segment paths and pinned
+ * to the top level (column-0 keys only) — so a flat `provider` no longer
+ * matches `model.provider` or `auxiliary.vision.provider` by accident.
+ *
+ * Returns the first match in document order at each level; later
+ * duplicates at the same level are ignored, matching YAML semantics for
+ * mappings.
+ */
+interface YamlPathHit {
+  value: string;
+  /** Absolute offset where the writer should splice the new value. */
+  valueStart: number;
+  /** Absolute offset just past the substring the writer should replace.
+   *  Excludes any trailing comment so we don't clobber `# notes`. */
+  valueEnd: number;
+}
+
+function findYamlPath(content: string, dottedPath: string): YamlPathHit | null {
+  const segments = dottedPath.split(".").filter(Boolean);
+  if (segments.length === 0) return null;
+
+  let cursor = 0;
+  let parentIndent = -1;
+
+  for (let i = 0; i < segments.length; i++) {
+    const segment = segments[i];
+    const isLast = i === segments.length - 1;
+    const found = findSegmentInBlock(content, cursor, parentIndent, segment);
+    if (!found) return null;
+
+    if (isLast) {
+      return {
+        value: stripYamlQuotes(found.rawValue),
+        valueStart: found.valueStart,
+        valueEnd: found.valueEnd,
+      };
+    }
+
+    // Descend: subsequent search continues after the segment's header
+    // line, bounded by indent > parentIndent.
+    cursor = found.afterLine;
+    parentIndent = found.indent;
+  }
+
+  return null;
+}
+
+interface SegmentMatch {
+  /** Indent length of the matched line. */
+  indent: number;
+  /** Raw value substring (between the colon's gap and any trailing comment). */
+  rawValue: string;
+  valueStart: number;
+  valueEnd: number;
+  /** Absolute offset of the byte just past the matched line's newline. */
+  afterLine: number;
+}
+
+function findSegmentInBlock(
+  content: string,
+  startAt: number,
+  parentIndent: number,
+  segment: string,
+): SegmentMatch | null {
+  // Walk lines from startAt until we leave the parent's block (a line
+  // with indent <= parentIndent). Within the block, return the first
+  // line whose key matches `segment` at the *minimum* indent > parent's
+  // — which is the depth of direct children.
+  const escapedSegment = escapeRegex(segment);
+  let directChildIndent: number | null = null;
+  let cursor = startAt;
+
+  while (cursor < content.length) {
+    const lineEnd = content.indexOf("\n", cursor);
+    const lineEndExclusive = lineEnd === -1 ? content.length : lineEnd;
+    const line = content.slice(cursor, lineEndExclusive);
+    const trimmed = line.trim();
+
+    if (trimmed === "" || trimmed.startsWith("#")) {
+      cursor = lineEndExclusive === content.length ? content.length : lineEndExclusive + 1;
+      continue;
+    }
+
+    const indent = line.length - line.trimStart().length;
+
+    // Block boundary: a non-blank line at or shallower than the parent
+    // closes the parent's block.
+    if (indent <= parentIndent) return null;
+
+    // First non-blank child sets the canonical "direct child" indent for
+    // this block. Deeper-nested lines (grandchildren) are walked past
+    // without being treated as siblings of `segment`.
+    if (directChildIndent === null) directChildIndent = indent;
+
+    if (indent === directChildIndent) {
+      // `[ \t]*` (zero-or-more) so this works at column 0 too — the
+      // first segment of a dotted path is a top-level key with no
+      // leading whitespace. The `indent === directChildIndent` gate
+      // above already enforces depth.
+      const m = line.match(
+        new RegExp(
+          `^([ \\t]*)(${escapedSegment}):([ \\t]*)([^\\n#]*?)([ \\t]*)(#.*)?$`,
+        ),
+      );
+      if (m) {
+        const indentStr = m[1];
+        const gapBeforeValue = m[3];
+        const rawValue = m[4];
+        const keyEnd = cursor + indentStr.length + segment.length + 1; // past `:`
+        const valueStart = keyEnd + gapBeforeValue.length;
+        const valueEnd = valueStart + rawValue.length;
+        return {
+          indent: indentStr.length,
+          rawValue,
+          valueStart,
+          valueEnd,
+          afterLine:
+            lineEndExclusive === content.length
+              ? content.length
+              : lineEndExclusive + 1,
+        };
+      }
+    }
+
+    cursor = lineEndExclusive === content.length ? content.length : lineEndExclusive + 1;
+  }
+
+  return null;
+}
+
+/**
+ * Read a top-level key at column 0 (no indent). Used when a caller
+ * passes a single-segment "path" — we don't want it to silently match
+ * a nested occurrence with the same name.
+ */
+function findTopLevelKey(content: string, key: string): YamlPathHit | null {
+  const re = new RegExp(
+    `^(${escapeRegex(key)}):([ \\t]*)([^\\n#]*?)([ \\t]*)(#.*)?$`,
+    "m",
+  );
+  const m = content.match(re);
+  if (!m || m.index === undefined) return null;
+  const gap = m[2];
+  const rawValue = m[3];
+  const lineStart = m.index;
+  const valueStart = lineStart + key.length + 1 + gap.length; // past `:` and gap
+  const valueEnd = valueStart + rawValue.length;
+  return {
+    value: stripYamlQuotes(rawValue),
+    valueStart,
+    valueEnd,
+  };
+}
+
 export function getConfigValue(key: string, profile?: string): string | null {
   const { configFile } = profilePaths(profile);
   if (!existsSync(configFile)) return null;
@@ -227,20 +408,39 @@ export function setConfigValue(
   value: string,
   profile?: string,
 ): void {
+  if (key === "API_SERVER_KEY") invalidateCache("apiServerKey:");
   const { configFile } = profilePaths(profile);
   if (!existsSync(configFile)) return;
 
   let content = readFileSync(configFile, "utf-8");
-  const regex = new RegExp(
-    `^(\\s*#?\\s*${escapeRegex(key)}:\\s*)["']?[^"'\\n#]*["']?`,
-    "m",
-  );
+  const segments = key.split(".").filter(Boolean);
+  if (segments.length === 0) return;
 
-  if (regex.test(content)) {
-    content = content.replace(regex, `$1"${value}"`);
+  const hit =
+    segments.length === 1
+      ? findTopLevelKey(content, segments[0])
+      : findYamlPath(content, key);
+
+  // Existing key → in-place replace, preserving surrounding whitespace
+  // and any trailing comment.
+  if (hit) {
+    content =
+      content.slice(0, hit.valueStart) +
+      `"${value}"` +
+      content.slice(hit.valueEnd);
+    safeWriteFile(configFile, content);
+    return;
   }
 
-  safeWriteFile(configFile, content);
+  // Key missing. For multi-segment paths we don't know how deep the
+  // user's existing parent block goes (or which segments exist), so
+  // avoid guessing — drop the write rather than corrupting the file.
+  // Top-level single keys are safe to append.
+  if (segments.length === 1) {
+    const sep = content.endsWith("\n") || content === "" ? "" : "\n";
+    content = `${content}${sep}${key}: "${value}"\n`;
+    safeWriteFile(configFile, content);
+  }
 }
 
 /**
@@ -341,18 +541,6 @@ function readTopLevelBlock(
     blockBodyStart,
     childIndent: firstChildIndent ?? "  ",
   };
-}
-
-function stripYamlQuotes(raw: string): string {
-  const trimmed = raw.trim();
-  if (trimmed.length >= 2) {
-    const first = trimmed[0];
-    const last = trimmed[trimmed.length - 1];
-    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
-      return trimmed.slice(1, -1);
-    }
-  }
-  return trimmed;
 }
 
 export function getModelConfig(profile?: string): {
