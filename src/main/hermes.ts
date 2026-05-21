@@ -312,6 +312,14 @@ function sendMessageViaApi(
     "Content-Type": "application/json",
     ...getRemoteAuthHeader(),
   };
+  // Session continuity: the gateway resumes an existing session via the
+  // `X-Hermes-Session-Id` *request header* — the `session_id` body field
+  // above is not honoured. Without this header every request forks a new
+  // server-side session, fragmenting stored history and messageCount
+  // (issue #226). The gateway echoes the id back in the response header.
+  if (_resumeSessionId) {
+    headers["X-Hermes-Session-Id"] = _resumeSessionId;
+  }
   // Local API server key (API_SERVER_KEY in the profile's .env /
   // config.yaml) only applies in local mode — in remote/SSH mode the
   // remote endpoint's own auth header (set above) is authoritative and
