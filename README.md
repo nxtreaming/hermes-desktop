@@ -84,7 +84,7 @@ sudo dnf install ./hermes-desktop-<version>.rpm
 
 - **Guided first-run install** for Hermes Agent with progress tracking and dependency resolution
 - **Local or remote backend** — run Hermes locally on `127.0.0.1:8642`, or connect the desktop app to a remote Hermes API server with URL + API key
-- **Multi-provider support** — OpenRouter, Anthropic, OpenAI, Google (Gemini), xAI (Grok), Nous Portal, Qwen, MiniMax, Hugging Face, Groq, and local OpenAI-compatible endpoints (LM Studio, Ollama, vLLM, llama.cpp)
+- **Multi-provider support** — OpenRouter, Anthropic, OpenAI, Google (Gemini), xAI (Grok), Nous Portal, Qwen, MiniMax, Hugging Face, Groq, and local OpenAI-compatible endpoints (LM Studio, Atomic Chat, Ollama, vLLM, llama.cpp)
 - **Streaming chat UI** with SSE streaming, tool progress indicators, markdown rendering, and syntax highlighting
 - **Token usage tracking** — live prompt/completion token counts and cost display in the chat footer, plus a `/usage` slash command
 - **22 slash commands** — `/new`, `/clear`, `/fast`, `/web`, `/image`, `/browse`, `/code`, `/shell`, `/usage`, `/help`, `/tools`, `/skills`, `/model`, `/memory`, `/persona`, `/version`, `/compact`, `/compress`, `/undo`, `/retry`, `/debug`, `/status`, and more
@@ -151,7 +151,7 @@ In local mode, chat requests go through `http://127.0.0.1:8642` with SSE streami
 | **Groq**            | Fast inference (voice/STT)               |
 | **Local/Custom**    | Any OpenAI-compatible endpoint           |
 
-Local presets are included for LM Studio, Ollama, vLLM, and llama.cpp.
+Local presets are included for LM Studio, Atomic Chat, Ollama, vLLM, and llama.cpp.
 
 ### Messaging Platforms
 
@@ -224,6 +224,7 @@ Supported setup paths in the UI:
 Local presets are included for:
 
 - LM Studio
+- Atomic Chat
 - Ollama
 - vLLM
 - llama.cpp
