@@ -1,29 +1,34 @@
 import { EventEmitter } from "events";
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 
-const { spawned, TEST_HOME, healthStatuses, apiRequests } = vi.hoisted(() => {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const path = require("path");
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const os = require("os");
-  return {
-    spawned: [] as Array<
-      EventEmitter & {
-        stdout: EventEmitter;
-        stderr: EventEmitter;
-        killed: boolean;
-        kill: ReturnType<typeof vi.fn>;
-        unref: ReturnType<typeof vi.fn>;
-      }
-    >,
-    TEST_HOME: path.join(os.tmpdir(), `hermes-cli-session-test-${Date.now()}`),
-    healthStatuses: [] as number[],
-    apiRequests: [] as Array<{
-      body: string;
-      headers: Record<string, string>;
-    }>,
-  };
-});
+const { spawned, TEST_HOME, TEST_REPO, healthStatuses, apiRequests } =
+  vi.hoisted(() => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const path = require("path");
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const os = require("os");
+    return {
+      spawned: [] as Array<
+        EventEmitter & {
+          stdout: EventEmitter;
+          stderr: EventEmitter;
+          killed: boolean;
+          kill: ReturnType<typeof vi.fn>;
+          unref: ReturnType<typeof vi.fn>;
+        }
+      >,
+      TEST_HOME: path.join(
+        os.tmpdir(),
+        `hermes-cli-session-test-${Date.now()}`,
+      ),
+      TEST_REPO: os.tmpdir(),
+      healthStatuses: [] as number[],
+      apiRequests: [] as Array<{
+        body: string;
+        headers: Record<string, string>;
+      }>,
+    };
+  });
 
 vi.mock("http", () => ({
   default: {
@@ -129,8 +134,8 @@ vi.mock("child_process", () => ({
 
 vi.mock("../src/main/installer", () => ({
   HERMES_HOME: TEST_HOME,
-  HERMES_PYTHON: "/usr/bin/python3",
-  HERMES_REPO: "/dev/null",
+  HERMES_PYTHON: process.execPath,
+  HERMES_REPO: TEST_REPO,
   hermesCliArgs: (extra?: string[]) => ["/dev/null", ...(extra || [])],
   getEnhancedPath: () => process.env.PATH || "",
 }));
@@ -152,6 +157,7 @@ vi.mock("../src/main/ssh-tunnel", () => ({
 vi.mock("../src/main/utils", () => ({
   stripAnsi: (s: string) => s,
   pidIsAliveAs: () => false,
+  getActiveProfileNameSync: () => "default",
 }));
 
 vi.mock("../src/main/models", () => ({
