@@ -6,6 +6,7 @@ export type AppLocale =
   | "pl"
   | "pt-BR"
   | "pt-PT"
+  | "tr"
   | "zh-CN"
   | "zh-TW";
 
