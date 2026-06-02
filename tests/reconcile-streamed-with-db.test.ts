@@ -281,6 +281,133 @@ describe("reconcileStreamedWithDb", () => {
     expect(merged[0].id).toBe("a-1");
   });
 
+  it("drops a concatenated streamed assistant bubble when DB splits the turn", () => {
+    const partA = "First paragraph from before the tool call.";
+    const partB = "Second paragraph after the tool result.";
+    const streamed: ChatMessage[] = [
+      STREAMED_USER("do the thing", "u-1"),
+      STREAMED_AGENT(`${partA}\n\n${partB}`, "a-concat"),
+    ];
+    const db: ChatMessage[] = [
+      DB_USER("do the thing", 1),
+      DB_AGENT(partA, 2),
+      DB_TOOL_CALL("call-1", "terminal", '{"command":"echo ok"}', 3),
+      DB_TOOL_RESULT("call-1", "terminal", "ok", 4),
+      DB_AGENT(partB, 5),
+    ];
+
+    const merged = reconcileStreamedWithDb(streamed, db);
+
+    expect(merged.map((m) => m.id)).toEqual([
+      "u-1",
+      "db-2",
+      "db-tc-3-call-1",
+      "db-tr-4",
+      "db-5",
+    ]);
+    expect(
+      merged.filter(
+        (m) => !("kind" in m) && m.content.includes(partB),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("does not repeat long-chat tool-split turns during DB refresh", () => {
+    const turn2A = "I checked the current directory before running the command.";
+    const turn2B = "The directory contains package.json and src.";
+    const turn3A = "I will inspect the failing test next.";
+    const turn3B = "The failing assertion is caused by duplicate rendering.";
+    const streamed: ChatMessage[] = [
+      STREAMED_USER("hello", "u-1"),
+      STREAMED_AGENT("Hi there.", "a-1"),
+      STREAMED_USER("list files", "u-2"),
+      STREAMED_AGENT(`${turn2A}\n\n${turn2B}`, "a-2-concat"),
+      STREAMED_USER("why is it failing?", "u-3"),
+      STREAMED_AGENT(`${turn3A}\n\n${turn3B}`, "a-3-concat"),
+    ];
+    const db: ChatMessage[] = [
+      DB_USER("hello", 1),
+      DB_AGENT("Hi there.", 2),
+      DB_USER("list files", 3),
+      DB_AGENT(turn2A, 4),
+      DB_TOOL_CALL("call-ls", "terminal", '{"command":"ls"}', 5),
+      DB_TOOL_RESULT("call-ls", "terminal", "package.json\nsrc", 6),
+      DB_AGENT(turn2B, 7),
+      DB_USER("why is it failing?", 8),
+      DB_AGENT(turn3A, 9),
+      DB_TOOL_CALL("call-test", "terminal", '{"command":"npm test"}', 10),
+      DB_TOOL_RESULT("call-test", "terminal", "1 failed", 11),
+      DB_AGENT(turn3B, 12),
+    ];
+
+    const merged = reconcileStreamedWithDb(streamed, db);
+
+    expect(merged.map((m) => m.id)).toEqual([
+      "u-1",
+      "a-1",
+      "u-2",
+      "db-4",
+      "db-tc-5-call-ls",
+      "db-tr-6",
+      "db-7",
+      "u-3",
+      "db-9",
+      "db-tc-10-call-test",
+      "db-tr-11",
+      "db-12",
+    ]);
+    for (const text of [turn2B, turn3B]) {
+      expect(
+        merged.filter((m) => !("kind" in m) && m.content.includes(text)),
+      ).toHaveLength(1);
+    }
+  });
+
+  it("preserves unmatched streamed bubbles that are not covered by a DB split", () => {
+    const streamedOnly = STREAMED_AGENT(
+      "Renderer-only warning: the provider closed the stream early.",
+      "a-warning",
+    );
+    const streamed: ChatMessage[] = [
+      STREAMED_USER("hi", "u-1"),
+      streamedOnly,
+    ];
+    const db: ChatMessage[] = [
+      DB_USER("hi", 1),
+      DB_AGENT("A different DB response.", 2),
+      DB_AGENT("Another canonical row.", 3),
+    ];
+
+    const merged = reconcileStreamedWithDb(streamed, db);
+
+    expect(merged[merged.length - 1]).toBe(streamedOnly);
+  });
+
+  it("does not drop a streamed answer that quotes assistant rows from different turns", () => {
+    const quoteA = "Earlier answer A.";
+    const quoteB = "Earlier answer B.";
+    const quotedSummary = `${quoteA}\n\n${quoteB}`;
+    const streamed: ChatMessage[] = [
+      STREAMED_USER("summarize prior answers", "u-current"),
+      STREAMED_AGENT(quotedSummary, "a-current"),
+    ];
+    const db: ChatMessage[] = [
+      DB_USER("first question", 1),
+      DB_AGENT(quoteA, 2),
+      DB_USER("second question", 3),
+      DB_AGENT(quoteB, 4),
+      DB_USER("summarize prior answers", 5),
+    ];
+
+    const merged = reconcileStreamedWithDb(streamed, db);
+
+    expect(merged[merged.length - 1]).toMatchObject({
+      id: "a-current",
+      role: "agent",
+      content: quotedSummary,
+    });
+  });
+
   it("keeps earlier streamed turns before a DB suffix from a split session", () => {
     // Regression: a cold desktop send briefly fell back to the CLI path,
     // which created a timestamp-style session id. The next send used the
