@@ -1,6 +1,11 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type { AppLocale } from "../shared/i18n/types";
 import type { Attachment } from "../shared/attachments";
+import type {
+  MessagingPlatformsResponse,
+  MessagingPlatformTestResponse,
+  MessagingPlatformUpdate,
+} from "../shared/messaging-platforms";
 
 /**
  * Mirror of the renderer-side `CredentialPoolEntry` ambient type
@@ -449,6 +454,21 @@ const hermesAPI = {
     profile?: string,
   ): Promise<boolean> =>
     ipcRenderer.invoke("set-platform-enabled", platform, enabled, profile),
+  getMessagingPlatforms: (
+    profile?: string,
+  ): Promise<MessagingPlatformsResponse> =>
+    ipcRenderer.invoke("get-messaging-platforms", profile),
+  updateMessagingPlatform: (
+    platform: string,
+    update: MessagingPlatformUpdate,
+    profile?: string,
+  ): Promise<{ ok: boolean; platform: string }> =>
+    ipcRenderer.invoke("update-messaging-platform", platform, update, profile),
+  testMessagingPlatform: (
+    platform: string,
+    profile?: string,
+  ): Promise<MessagingPlatformTestResponse> =>
+    ipcRenderer.invoke("test-messaging-platform", platform, profile),
 
   // Sessions
   listSessions: (

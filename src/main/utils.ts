@@ -110,24 +110,39 @@ export function pidIsAlive(pid: number): boolean {
  * own that number, EPERM would lie. Verifying the image name (e.g. starts
  * with "python") catches that.
  *
- * Synchronous tasklist call with a tight timeout — acceptable because it's
- * gated behind a positive liveness check that already short-circuits the
- * common "process is gone" path.
+ * Synchronous tasklist is noticeably expensive on some Windows machines, so
+ * cache successful and failed lookups briefly and fail fast. The liveness
+ * check still runs before this, so a flaky image lookup should not make a
+ * healthy gateway look dead.
  */
+const PROCESS_IMAGE_CACHE_TTL_MS = 30_000;
+const processImageNameCache = new Map<
+  number,
+  { image: string | null; checkedAt: number }
+>();
+
 export function getProcessImageNameWin(pid: number): string | null {
   if (process.platform !== "win32") return null;
   if (!pid || !Number.isFinite(pid)) return null;
+  const now = Date.now();
+  const cached = processImageNameCache.get(pid);
+  if (cached && now - cached.checkedAt < PROCESS_IMAGE_CACHE_TTL_MS) {
+    return cached.image;
+  }
   try {
     const output = execFileSync(
       "tasklist",
       ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"],
-      { encoding: "utf-8", timeout: 5000, windowsHide: true },
+      { encoding: "utf-8", timeout: 500, windowsHide: true },
     );
     // CSV row format: "image.exe","27652","Console","1","45,000 K"
     // Returns "INFO: No tasks are running…" if the PID doesn't exist.
     const m = output.match(/^"([^"]+)"/);
-    return m ? m[1] : null;
+    const image = m ? m[1] : null;
+    processImageNameCache.set(pid, { image, checkedAt: now });
+    return image;
   } catch {
+    processImageNameCache.set(pid, { image: null, checkedAt: now });
     return null;
   }
 }

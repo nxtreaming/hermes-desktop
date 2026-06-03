@@ -6,6 +6,11 @@ import type {
   RegistryCatalog,
   RegistryDetail,
 } from "../shared/registry";
+import type {
+  MessagingPlatformsResponse,
+  MessagingPlatformTestResponse,
+  MessagingPlatformUpdate,
+} from "../shared/messaging-platforms";
 
 interface ElectronAPI {
   process: {
@@ -368,6 +373,16 @@ interface HermesAPI {
     enabled: boolean,
     profile?: string,
   ) => Promise<boolean>;
+  getMessagingPlatforms: (profile?: string) => Promise<MessagingPlatformsResponse>;
+  updateMessagingPlatform: (
+    platform: string,
+    update: MessagingPlatformUpdate,
+    profile?: string,
+  ) => Promise<{ ok: boolean; platform: string }>;
+  testMessagingPlatform: (
+    platform: string,
+    profile?: string,
+  ) => Promise<MessagingPlatformTestResponse>;
 
   // Sessions
   listSessions: (

@@ -138,7 +138,12 @@ import {
   writeUserProfile,
 } from "./memory";
 import { readSoul, writeSoul, resetSoul } from "./soul";
-import { getToolsets, setToolsetEnabled } from "./tools";
+import {
+  getPlatformToolsets,
+  getToolsets,
+  setMessagingPlatformToolsetEnabled,
+  setToolsetEnabled,
+} from "./tools";
 import {
   fetchRegistry,
   fetchRegistryDetail,
@@ -162,6 +167,15 @@ import {
   resumeCronJob,
   triggerCronJob,
 } from "./cronjobs";
+import {
+  applyMessagingPlatformUpdate,
+  buildDesktopMessagingPlatforms,
+  fetchRemoteMessagingPlatforms,
+  readLocalGatewayPlatformStates,
+  testDesktopMessagingPlatform,
+  testRemoteMessagingPlatform,
+  updateRemoteMessagingPlatform,
+} from "./messaging-platforms";
 import {
   listBoards as kanbanListBoards,
   currentBoard as kanbanCurrentBoard,
@@ -207,7 +221,9 @@ import {
   sshWriteSoul,
   sshResetSoul,
   sshGetToolsets,
+  sshGetPlatformToolsets,
   sshSetToolsetEnabled,
+  sshSetMessagingPlatformToolsetEnabled,
   sshReadEnv,
   sshSetEnvValue,
   sshGetConfigValue,
@@ -1103,6 +1119,118 @@ function setupIPC(): void {
         restartGateway(profile);
       }
       return true;
+    },
+  );
+
+  ipcMain.handle("get-messaging-platforms", async (_event, profile?: string) => {
+    const conn = getConnectionConfig();
+    if (conn.mode === "remote") {
+      return fetchRemoteMessagingPlatforms();
+    }
+    if (conn.mode === "ssh" && conn.ssh) {
+      const [envData, enabled, running, platformToolsets] = await Promise.all([
+        sshReadEnv(conn.ssh, profile),
+        sshGetPlatformEnabled(conn.ssh, profile),
+        sshGatewayStatus(conn.ssh),
+        sshGetPlatformToolsets(conn.ssh, profile),
+      ]);
+      return buildDesktopMessagingPlatforms(
+        envData,
+        enabled,
+        running,
+        platformToolsets,
+      );
+    }
+    const running = isGatewayRunning(profile);
+    return buildDesktopMessagingPlatforms(
+      readEnv(profile),
+      getPlatformEnabled(profile),
+      running,
+      getPlatformToolsets(profile),
+      readLocalGatewayPlatformStates(profile, running),
+    );
+  });
+
+  ipcMain.handle(
+    "update-messaging-platform",
+    async (_event, platform: string, update, profile?: string) => {
+      const conn = getConnectionConfig();
+      if (conn.mode === "remote") {
+        return updateRemoteMessagingPlatform(platform, update);
+      }
+      if (conn.mode === "ssh" && conn.ssh) {
+        await applyMessagingPlatformUpdate(
+          platform,
+          update,
+          (key, value) => sshSetEnvValue(conn.ssh!, key, value, profile),
+          (key, enabled) =>
+            sshSetPlatformEnabled(conn.ssh!, key, enabled, profile),
+          (platformKey, toolsetKey, enabled) =>
+            sshSetMessagingPlatformToolsetEnabled(
+              conn.ssh!,
+              platformKey,
+              toolsetKey,
+              enabled,
+              profile,
+            ),
+        );
+        return { ok: true, platform };
+      }
+      await applyMessagingPlatformUpdate(
+        platform,
+        update,
+        (key, value) => setEnvValue(key, value, profile),
+        (key, enabled) => setPlatformEnabled(key, enabled, profile),
+        (platformKey, toolsetKey, enabled) =>
+          setMessagingPlatformToolsetEnabled(
+            platformKey,
+            toolsetKey,
+            enabled,
+            profile,
+          ),
+      );
+      if (isGatewayRunning(profile)) {
+        restartGateway(profile);
+      }
+      return { ok: true, platform };
+    },
+  );
+
+  ipcMain.handle(
+    "test-messaging-platform",
+    async (_event, platform: string, profile?: string) => {
+      const conn = getConnectionConfig();
+      if (conn.mode === "remote") {
+        return testRemoteMessagingPlatform(platform);
+      }
+      if (conn.mode === "ssh" && conn.ssh) {
+        const [envData, enabled, running, platformToolsets] = await Promise.all([
+          sshReadEnv(conn.ssh, profile),
+          sshGetPlatformEnabled(conn.ssh, profile),
+          sshGatewayStatus(conn.ssh),
+          sshGetPlatformToolsets(conn.ssh, profile),
+        ]);
+        return testDesktopMessagingPlatform(
+          platform,
+          buildDesktopMessagingPlatforms(
+            envData,
+            enabled,
+            running,
+            platformToolsets,
+          ),
+        );
+      }
+      const running = isGatewayRunning(profile);
+      return testDesktopMessagingPlatform(
+        platform,
+        buildDesktopMessagingPlatforms(
+          readEnv(profile),
+          getPlatformEnabled(profile),
+          running,
+          getPlatformToolsets(profile),
+          readLocalGatewayPlatformStates(profile, running),
+        ),
+      );
     },
   );
 
