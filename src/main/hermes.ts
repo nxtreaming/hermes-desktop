@@ -50,6 +50,10 @@ import {
   chatToolProgressLabel,
   type ChatToolEvent,
 } from "../shared/chat-stream";
+import {
+  hostDerivedEnvKeyForUrl,
+  shouldPruneOpenRouterApiKey,
+} from "./host-derived-env";
 
 /**
  * Resolve which profile a gateway call targets. An explicit profile always
@@ -930,13 +934,28 @@ function sendMessageViaCli(
       env.OPENAI_BASE_URL = mc.baseUrl.replace(/\/+$/, "");
     }
 
-    // Resolve the right API key: check URL-specific key first, then OPENAI_API_KEY
+    // Find the host-derived env-var name (if any). Used both for resolving
+    // the key here, AND for writing it back into the child env below so
+    // both old and new engines locate the same value:
+    //
+    //  - Old engine (≤ v0.14.0) routes via OPENAI_API_KEY + OPENAI_BASE_URL.
+    //  - Current upstream main refuses to forward OPENAI_API_KEY to a
+    //    non-openai host and instead derives <VENDOR>_API_KEY from the
+    //    URL host (see hermes_cli/runtime_provider.py::_host_derived_api_key).
+    //    Without the host-derived var in the child env, chat against a
+    //    custom provider on api.deepseek.com / api.groq.com / etc. falls
+    //    through to "no-key-required" and 401s.
+    //
+    // Writing both env-var forms is the additive compat strategy — each
+    // engine reads the form it knows; the unused one is dead weight.
+    const hostDerivedEnvKey = hostDerivedEnvKeyForUrl(mc.baseUrl);
+
+    // Resolve the right API key: host-derived first, then custom provider
+    // entry from models.json, then CUSTOM_API_KEY / OPENAI_API_KEY fallback.
     let resolvedKey = "";
-    for (const { pattern, envKey } of URL_KEY_MAP) {
-      if (pattern.test(mc.baseUrl)) {
-        resolvedKey = profileEnv[envKey] || env[envKey] || "";
-        break;
-      }
+    if (hostDerivedEnvKey) {
+      resolvedKey =
+        profileEnv[hostDerivedEnvKey] || env[hostDerivedEnvKey] || "";
     }
     if (!resolvedKey) {
       // Try custom provider auto-generated key from models.json
@@ -972,7 +991,25 @@ function sendMessageViaCli(
       env.OPENAI_API_KEY = resolvedKey || "no-key-required";
     }
 
-    delete env.OPENROUTER_API_KEY;
+    // Forward-compat with upstream main: also write the host-derived
+    // env var so `_host_derived_api_key` finds it. Only when the URL
+    // matches a known vendor (NOT for generic local LLMs), and only
+    // when we have a real key — never propagate "no-key-required" to
+    // a vendor-scoped slot, and never overwrite OPENAI_API_KEY /
+    // ANTHROPIC_API_KEY through this path (they're handled above).
+    if (
+      hostDerivedEnvKey &&
+      hostDerivedEnvKey !== "OPENAI_API_KEY" &&
+      hostDerivedEnvKey !== "ANTHROPIC_API_KEY" &&
+      resolvedKey &&
+      resolvedKey !== "no-key-required"
+    ) {
+      env[hostDerivedEnvKey] = resolvedKey;
+    }
+
+    if (shouldPruneOpenRouterApiKey(hostDerivedEnvKey)) {
+      delete env.OPENROUTER_API_KEY;
+    }
     delete env.ANTHROPIC_TOKEN;
     delete env.OPENROUTER_BASE_URL;
   }

@@ -3,6 +3,7 @@ import { join } from "path";
 import { randomUUID } from "crypto";
 import { HERMES_HOME } from "./installer";
 import { safeWriteFile, profilePaths } from "./utils";
+import { hostDerivedEnvKeyForUrl } from "./host-derived-env";
 import DEFAULT_MODELS from "./default-models";
 
 const MODELS_FILE = join(HERMES_HOME, "models.json");
@@ -109,22 +110,57 @@ function seedDefaults(profile?: string): SavedModel[] {
         apiMode: cp.apiMode || null,
         createdAt: Date.now(),
       });
-      if (cp.apiKey) {
+      if (cp.apiKey && cp.apiKey !== "no-key-required") {
         try {
           let envContent = existsSync(envFile)
             ? readFileSync(envFile, "utf-8")
             : "";
-          const envKey =
+          // Names to persist for this custom-provider key:
+          //   1. CUSTOM_PROVIDER_<NAME>_KEY — the historical desktop
+          //      contract; the runtime spawn in `hermes.ts` reads it
+          //      via the models.json baseUrl match.
+          //   2. <VENDOR>_API_KEY when the URL matches a known vendor
+          //      host (e.g. api.deepseek.com → DEEPSEEK_API_KEY) —
+          //      required for dual-engine compat: upstream-main's
+          //      `_host_derived_api_key()` won't accept the custom-
+          //      prefix form. Old engine (≤ v2026.5.16) doesn't have
+          //      the host-derive resolver and ignores this extra var,
+          //      so writing both is additive and safe.
+          // The gateway path in `hermes.ts:startGateway` ingests ALL
+          // profile env vars at spawn, so the host-derived form has
+          // to live in .env (not just be set at chat-time) for the
+          // long-running gateway flow to work on the new engine.
+          const customPrefixKey =
             "CUSTOM_PROVIDER_" +
             cp.name.replace(/[^A-Za-z0-9]/g, "_").toUpperCase() +
             "_KEY";
-          const keyRegex = new RegExp(
-            "^" + envKey.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "=.*$",
-            "m",
-          );
-          if (!keyRegex.test(envContent)) {
-            envContent =
-              envContent.trimEnd() + "\n" + envKey + "=" + cp.apiKey + "\n";
+          const namesToWrite: string[] = [customPrefixKey];
+          const hostKey = hostDerivedEnvKeyForUrl(cp.baseUrl);
+          // Don't shadow real OPENAI / ANTHROPIC keys via this path —
+          // those belong to a separately-configured provider, not a
+          // custom-provider key. The persistence guard mirrors the
+          // runtime guard in `hermes.ts`.
+          if (
+            hostKey &&
+            hostKey !== "OPENAI_API_KEY" &&
+            hostKey !== "ANTHROPIC_API_KEY" &&
+            hostKey !== customPrefixKey
+          ) {
+            namesToWrite.push(hostKey);
+          }
+          let modified = false;
+          for (const envKey of namesToWrite) {
+            const keyRegex = new RegExp(
+              "^" + envKey.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "=.*$",
+              "m",
+            );
+            if (!keyRegex.test(envContent)) {
+              envContent =
+                envContent.trimEnd() + "\n" + envKey + "=" + cp.apiKey + "\n";
+              modified = true;
+            }
+          }
+          if (modified) {
             safeWriteFile(envFile, envContent);
           }
         } catch {
