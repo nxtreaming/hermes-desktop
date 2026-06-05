@@ -57,6 +57,7 @@ export default {
   media: {
     open: "Otwórz",
     saveAs: "Zapisz jako…",
+    saveImage: "Zapisz obraz",
   },
   commands: {
     new: "Rozpocznij nowy czat",

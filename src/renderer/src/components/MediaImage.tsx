@@ -27,13 +27,14 @@ function useMediaContextMenu(
  * Renders an agent-delivered image (issue #299). Data URLs and http(s)
  * URLs render directly; local filesystem paths are resolved to a data URL
  * through the main process. Clicking the image opens a zoom/lightbox
- * overlay with a "Save image" action.
+ * overlay with a localized save action.
  */
 export function MediaImage({
   token,
 }: {
   token: MediaToken;
 }): React.JSX.Element {
+  const { t } = useI18n();
   const isDirect =
     token.src.startsWith("data:") || /^https?:\/\//i.test(token.src);
   const [resolved, setResolved] = useState<string | null>(
@@ -106,7 +107,7 @@ export function MediaImage({
               }
             >
               <Download size={14} />
-              Save image
+              {t("chat.media.saveImage")}
             </button>
             <button
               className="chat-image-preview-btn"

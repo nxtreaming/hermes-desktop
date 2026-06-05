@@ -53,6 +53,7 @@ export default {
   media: {
     open: "Abrir",
     saveAs: "Salvar como…",
+    saveImage: "Salvar imagem",
   },
   commands: {
     new: "Iniciar um novo chat",

@@ -62,6 +62,7 @@ export default {
   media: {
     open: "Abrir",
     saveAs: "Guardar como…",
+    saveImage: "Guardar imagem",
   },
   commands: {
     new: "Iniciar um novo chat",

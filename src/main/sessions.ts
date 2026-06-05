@@ -5,6 +5,11 @@ import type { Attachment } from "../shared/attachments";
 import { isImageMime } from "../shared/attachments";
 import { clearStagedAttachments } from "./attachment-staging";
 import { removeSessionFromCache } from "./session-cache";
+import {
+  deletePromptImageAttachmentsForSession,
+  loadPromptImageAttachments,
+  stripTrailingImagePlaceholders,
+} from "./session-attachment-store";
 
 // Sentinel prefix used by hermes-agent's hermes_state.py to mark
 // JSON-encoded multimodal content in the messages.content column.
@@ -567,6 +572,27 @@ export function expandRowsToHistory(rows: RawMessageRow[]): HistoryItem[] {
   return items;
 }
 
+export function mergeStoredPromptImageAttachments(
+  items: HistoryItem[],
+  attachmentsByMessageId: Map<number, Attachment[]>,
+): HistoryItem[] {
+  if (attachmentsByMessageId.size === 0) return items;
+
+  return items.map((item) => {
+    if (item.kind !== "user") return item;
+    const stored = attachmentsByMessageId.get(item.id);
+    if (!stored || stored.length === 0) return item;
+    return {
+      ...item,
+      content: stripTrailingImagePlaceholders(item.content),
+      attachments:
+        item.attachments && item.attachments.length > 0
+          ? item.attachments
+          : stored,
+    };
+  });
+}
+
 export function getSessionMessages(sessionId: string): HistoryItem[] {
   const db = getDb();
   if (!db) return [];
@@ -583,7 +609,11 @@ export function getSessionMessages(sessionId: string): HistoryItem[] {
       )
       .all(sessionId) as RawMessageRow[];
 
-    return expandRowsToHistory(rows);
+    const items = expandRowsToHistory(rows);
+    return mergeStoredPromptImageAttachments(
+      items,
+      loadPromptImageAttachments(db, sessionId),
+    );
   } finally {
     db.close();
   }
@@ -607,6 +637,38 @@ function normalizeSessionIds(sessionIds: string[]): string[] {
   return normalized;
 }
 
+function deleteSessionRows(db: Database.Database, sessionId: string): number {
+  deletePromptImageAttachmentsForSession(db, sessionId);
+  db.prepare("DELETE FROM messages WHERE session_id = ?").run(sessionId);
+  const result = db.prepare("DELETE FROM sessions WHERE id = ?").run(sessionId);
+  return result.changes;
+}
+
+function cleanupDeletedSession(sessionId: string): void {
+  clearStagedAttachments(sessionId);
+  removeSessionFromCache(sessionId);
+}
+
+export function deleteSession(sessionId: string): void {
+  const id = normalizeSessionIds([sessionId])[0];
+  if (!id) return;
+
+  const db = getDb(false);
+
+  if (db) {
+    try {
+      const tx = db.transaction((sessionIdToDelete: string) => {
+        deleteSessionRows(db, sessionIdToDelete);
+      });
+      tx(id);
+    } finally {
+      db.close();
+    }
+  }
+
+  cleanupDeletedSession(id);
+}
+
 export function deleteSessions(sessionIds: string[]): DeleteSessionsResult {
   const ids = normalizeSessionIds(sessionIds);
   let deleted = 0;
@@ -616,17 +678,8 @@ export function deleteSessions(sessionIds: string[]): DeleteSessionsResult {
   if (db) {
     try {
       const tx = db.transaction((idsToDelete: string[]) => {
-        const deleteMessages = db.prepare(
-          "DELETE FROM messages WHERE session_id = ?",
-        );
-        const deleteSessionRow = db.prepare(
-          "DELETE FROM sessions WHERE id = ?",
-        );
-
         for (const id of idsToDelete) {
-          deleteMessages.run(id);
-          const result = deleteSessionRow.run(id);
-          if (result.changes > 0) deleted += result.changes;
+          deleted += deleteSessionRows(db, id);
         }
       });
       tx(ids);
@@ -636,13 +689,8 @@ export function deleteSessions(sessionIds: string[]): DeleteSessionsResult {
   }
 
   for (const id of ids) {
-    clearStagedAttachments(id);
-    removeSessionFromCache(id);
+    cleanupDeletedSession(id);
   }
 
   return { requested: ids.length, deleted };
-}
-
-export function deleteSession(sessionId: string): void {
-  deleteSessions([sessionId]);
 }

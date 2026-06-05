@@ -49,6 +49,7 @@ export default {
   media: {
     open: "打开",
     saveAs: "另存为…",
+    saveImage: "保存图片",
   },
   commands: {
     new: "开始新对话",

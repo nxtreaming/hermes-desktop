@@ -53,6 +53,7 @@ export default {
   media: {
     open: "Buka",
     saveAs: "Simpan sebagai…",
+    saveImage: "Simpan gambar",
   },
   commands: {
     new: "Mulai chat baru",

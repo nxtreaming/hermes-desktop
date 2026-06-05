@@ -37,6 +37,7 @@ export default {
   media: {
     open: "開啟",
     saveAs: "另存新檔…",
+    saveImage: "儲存圖片",
   },
   commands: {
     new: "開始新對話",

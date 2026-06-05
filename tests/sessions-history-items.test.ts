@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import {
   expandRowsToHistory,
   dedupeSearchRowsBySession,
+  mergeStoredPromptImageAttachments,
   pickReasoning,
   parseToolCalls,
   type RawMessageRow,
@@ -315,5 +316,44 @@ describe("expandRowsToHistory", () => {
     expect((items[0] as Extract<HistoryItem, { kind: "user" }>).content).toBe(
       "real",
     );
+  });
+
+  it("rehydrates desktop-stored prompt images and hides the DB placeholder", () => {
+    const items = expandRowsToHistory([
+      row({
+        id: 10,
+        role: "user",
+        content: "describe this image\n[screenshot]",
+        timestamp: 1,
+      }),
+      row({ id: 11, role: "assistant", content: "a logo", timestamp: 2 }),
+    ]);
+
+    const merged = mergeStoredPromptImageAttachments(
+      items,
+      new Map([
+        [
+          10,
+          [
+            {
+              id: "db-att-10-0",
+              kind: "image",
+              name: "logo.png",
+              mime: "image/png",
+              size: 3,
+              dataUrl: "data:image/png;base64,AAA=",
+            },
+          ],
+        ],
+      ]),
+    );
+
+    expect(merged[0]).toMatchObject({
+      kind: "user",
+      content: "describe this image",
+    });
+    expect(
+      "attachments" in merged[0] ? merged[0].attachments?.[0].dataUrl : "",
+    ).toBe("data:image/png;base64,AAA=");
   });
 });

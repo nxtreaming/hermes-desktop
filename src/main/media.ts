@@ -8,15 +8,23 @@
 
 import {
   existsSync,
+  mkdirSync,
+  readdirSync,
   readFileSync,
   writeFileSync,
   copyFileSync,
   statSync,
+  rmSync,
 } from "fs";
-import { extname } from "path";
+import { join, extname } from "path";
+import { tmpdir } from "os";
+import { createHash } from "crypto";
 import { BrowserWindow, dialog } from "electron";
 
 const MAX_MEDIA_BYTES = 25 * 1024 * 1024;
+const TEMP_MEDIA_DIR = join(tmpdir(), "hermes-desktop-media");
+const TEMP_MEDIA_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const TEMP_MEDIA_MAX_FILES = 100;
 
 const MIME_BY_EXT: Record<string, string> = {
   ".png": "image/png",
@@ -28,6 +36,89 @@ const MIME_BY_EXT: Record<string, string> = {
   ".bmp": "image/bmp",
   ".avif": "image/avif",
 };
+
+const EXT_BY_MIME: Record<string, string> = Object.fromEntries(
+  Object.entries(MIME_BY_EXT).map(([ext, mime]) => [mime, ext]),
+);
+
+function sanitizeFilename(name: string): string {
+  const cleaned = (name || "image")
+    .replace(/[\x00-\x1F<>:"/\\|?*]/g, "")
+    .replace(/\s+/g, "_")
+    .replace(/\.{2,}/g, ".")
+    .trim();
+  return (cleaned || "image").slice(0, 160);
+}
+
+function decodeDataUrl(src: string): { mime: string; buffer: Buffer } | null {
+  const match = /^data:([^;,]+);base64,(.*)$/s.exec(src || "");
+  if (!match) return null;
+  const mime = match[1].toLowerCase();
+  const buffer = Buffer.from(match[2], "base64");
+  if (buffer.length <= 0 || buffer.length > MAX_MEDIA_BYTES) return null;
+  return { mime, buffer };
+}
+
+export function cleanupTempMediaFiles({
+  maxAgeMs = 0,
+  maxFiles = 0,
+}: {
+  maxAgeMs?: number;
+  maxFiles?: number;
+} = {}): void {
+  try {
+    if (!existsSync(TEMP_MEDIA_DIR)) return;
+    const now = Date.now();
+    const entries = readdirSync(TEMP_MEDIA_DIR, { withFileTypes: true })
+      .filter((entry) => entry.isFile())
+      .map((entry) => {
+        const path = join(TEMP_MEDIA_DIR, entry.name);
+        return { path, mtimeMs: statSync(path).mtimeMs };
+      })
+      .sort((a, b) => a.mtimeMs - b.mtimeMs);
+
+    const keepNewestFrom = Math.max(0, entries.length - maxFiles);
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i];
+      const expired = maxAgeMs <= 0 || now - entry.mtimeMs > maxAgeMs;
+      const overLimit = maxFiles <= 0 || i < keepNewestFrom;
+      if (expired || overLimit) {
+        rmSync(entry.path, { force: true });
+      }
+    }
+  } catch {
+    // Best-effort cleanup only. Failure should never block opening media.
+  }
+}
+
+export function materializeDataUrlToTemp(
+  src: string,
+  suggestedName: string,
+): string | null {
+  try {
+    const decoded = decodeDataUrl(src);
+    if (!decoded) return null;
+
+    mkdirSync(TEMP_MEDIA_DIR, { recursive: true });
+    cleanupTempMediaFiles({
+      maxAgeMs: TEMP_MEDIA_MAX_AGE_MS,
+      maxFiles: TEMP_MEDIA_MAX_FILES,
+    });
+
+    let filename = sanitizeFilename(suggestedName);
+    if (!extname(filename)) {
+      filename += EXT_BY_MIME[decoded.mime] || ".bin";
+    }
+    const hash = createHash("sha256").update(decoded.buffer).digest("hex");
+    const target = join(TEMP_MEDIA_DIR, `${hash.slice(0, 16)}-${filename}`);
+    if (!existsSync(target)) {
+      writeFileSync(target, decoded.buffer);
+    }
+    return target;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Read a local image file and return it as a `data:` URL. Returns null when
@@ -78,9 +169,9 @@ export async function saveMedia(
     const dest = result.filePath;
 
     if (src.startsWith("data:")) {
-      const comma = src.indexOf(",");
-      if (comma === -1) return false;
-      writeFileSync(dest, Buffer.from(src.slice(comma + 1), "base64"));
+      const decoded = decodeDataUrl(src);
+      if (!decoded) return false;
+      writeFileSync(dest, decoded.buffer);
       return true;
     }
 

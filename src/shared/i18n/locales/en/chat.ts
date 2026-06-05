@@ -74,6 +74,7 @@ export default {
   media: {
     open: "Open",
     saveAs: "Save as…",
+    saveImage: "Save image",
   },
   commands: {
     new: "Start a new chat",

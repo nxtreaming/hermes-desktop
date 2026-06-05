@@ -75,6 +75,7 @@ export default {
   media: {
     open: "Aç",
     saveAs: "Farklı kaydet…",
+    saveImage: "Görseli kaydet",
   },
   commands: {
     new: "Yeni bir sohbet başlat",
